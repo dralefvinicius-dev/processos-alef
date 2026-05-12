@@ -28,12 +28,13 @@ function fmt(v: number | null | undefined) {
   return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
-function calcExito(p: Processo): number {
-  if (!p.valor_causa || !p.honorarios_exito_pct) return 0
-  return (p.valor_causa * p.honorarios_exito_pct) / 100
+function calcExito(p: Processo & { condenacao_prevista?: number | null }): number {
+  const base = p.condenacao_prevista || 0
+  if (!base || !p.honorarios_exito_pct) return 0
+  return (base * p.honorarios_exito_pct) / 100
 }
 
-function calcTotal(p: Processo): number {
+function calcTotal(p: Processo & { condenacao_prevista?: number | null }): number {
   return calcExito(p) + (p.honorarios_sucumbencia || 0)
 }
 
@@ -47,13 +48,15 @@ function Initials({ nome }: { nome: string }) {
   )
 }
 
+type ProcessoExt = Processo & { condenacao_prevista?: number | null }
+
 export default function Home() {
   const [aba, setAba] = useState<'dashboard' | 'processos' | 'honorarios'>('dashboard')
-  const [processos, setProcessos] = useState<Processo[]>([])
+  const [processos, setProcessos] = useState<ProcessoExt[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
   const [modal, setModal] = useState(false)
-  const [form, setForm] = useState<Processo>(PROC_VAZIO)
+  const [form, setForm] = useState<ProcessoExt>(PROC_VAZIO)
   const [editId, setEditId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [busca, setBusca] = useState('')
@@ -96,6 +99,7 @@ export default function Home() {
     const payload = {
       ...form,
       valor_causa: form.valor_causa || null,
+      condenacao_prevista: (form as any).condenacao_prevista || null,
       honorarios_exito_pct: form.honorarios_exito_pct || null,
       honorarios_sucumbencia: form.honorarios_sucumbencia || null,
       proxima_movimentacao: form.proxima_movimentacao || null,
@@ -114,7 +118,7 @@ export default function Home() {
     await supabase.from('processos').delete().eq('id', id); carregar()
   }
 
-  const abrirEditar = (p: Processo) => { setForm({ ...p }); setEditId(p.id || null); setModal(true) }
+  const abrirEditar = (p: ProcessoExt) => { setForm({ ...p }); setEditId(p.id || null); setModal(true) }
   const abrirNovo = () => { setForm({ ...PROC_VAZIO }); setEditId(null); setModal(true) }
 
   const navItems = [
@@ -125,6 +129,7 @@ export default function Home() {
 
   const inp: React.CSSProperties = { width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '9px 12px', fontSize: 14, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' }
   const lbl: React.CSSProperties = { fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 4, fontWeight: 500 }
+  const sublbl: React.CSSProperties = { fontSize: 11, color: '#9ca3af', display: 'block', marginTop: 2 }
 
   const barChart = (campo: keyof Processo) => {
     const m: Record<string, number> = {}
@@ -142,6 +147,9 @@ export default function Home() {
     ))
   }
 
+  const exitoPreview = calcExito(form)
+  const totalPreview = calcTotal(form)
+
   return (
     <>
       <style>{`
@@ -154,6 +162,8 @@ export default function Home() {
         .stats2 { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; margin-bottom: 24px; }
         .charts2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .topbar { display: none; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .hon-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+        .hon-exito { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         @media (max-width: 768px) {
           .sidebar { display: none; }
           .bottomnav { display: flex; position: fixed; bottom: 0; left: 0; right: 0; background: ${NAVY}; z-index: 20; border-top: 1px solid rgba(201,168,76,0.2); padding-bottom: env(safe-area-inset-bottom); }
@@ -167,6 +177,8 @@ export default function Home() {
           .charts2 { grid-template-columns: 1fr; }
           .desktop-header { display: none !important; }
           .table-wrap { overflow-x: auto; }
+          .hon-grid { grid-template-columns: 1fr; }
+          .hon-exito { grid-template-columns: 1fr; }
         }
       `}</style>
 
@@ -203,7 +215,6 @@ export default function Home() {
 
         {/* Main */}
         <div className="main">
-          {/* Mobile header */}
           <div className="topbar">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 36, height: 36, borderRadius: '50%', border: `2px solid ${GOLD}`, background: NAVY, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -217,7 +228,6 @@ export default function Home() {
             <button onClick={abrirNovo} style={{ background: NAVY, color: GOLD, border: `1px solid ${GOLD}`, padding: '8px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>+ Processo</button>
           </div>
 
-          {/* Desktop header */}
           <div className="desktop-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
             <div>
               <h1 style={{ fontSize: 22, fontWeight: 700, color: NAVY, margin: 0 }}>
@@ -240,29 +250,25 @@ export default function Home() {
                 {[
                   { label: 'Processos ativos', val: ativos.length, cor: NAVY, tipo: 'num' },
                   { label: 'Valor total em causa', val: totalCausa, cor: '#2563eb', tipo: 'money' },
-                  { label: 'Previsão de honorários', val: totalGeral, cor: GOLD, tipo: 'money' },
+                  { label: 'Previsão total', val: totalGeral, cor: GOLD, tipo: 'money' },
                   { label: 'Honorários de êxito', val: totalExito, cor: '#059669', tipo: 'money' },
                 ].map(s => (
                   <div key={s.label} style={{ background: '#fff', borderRadius: 12, padding: 16, borderLeft: `4px solid ${s.cor}`, boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
                     <div style={{ fontSize: 10, color: '#9ca3af', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>{s.label}</div>
-                    <div style={{ fontSize: s.tipo === 'money' ? 18 : 30, fontWeight: 700, color: s.cor }}>{s.tipo === 'money' ? fmt(s.val as number) : s.val}</div>
+                    <div style={{ fontSize: s.tipo === 'money' ? 17 : 30, fontWeight: 700, color: s.cor }}>{s.tipo === 'money' ? fmt(s.val as number) : s.val}</div>
                   </div>
                 ))}
               </div>
-
-              {/* Sucumbência separada */}
               <div className="stats2">
                 <div style={{ background: '#fff', borderRadius: 12, padding: 16, borderLeft: `4px solid #7c3aed`, boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
                   <div style={{ fontSize: 10, color: '#9ca3af', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Honorários de sucumbência</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#7c3aed' }}>{fmt(totalSucumbencia)}</div>
+                  <div style={{ fontSize: 17, fontWeight: 700, color: '#7c3aed' }}>{fmt(totalSucumbencia)}</div>
                 </div>
                 <div style={{ background: '#fff', borderRadius: 12, padding: 16, borderLeft: `4px solid ${GOLD}`, boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
                   <div style={{ fontSize: 10, color: '#9ca3af', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Total previsto (êxito + sucumbência)</div>
                   <div style={{ fontSize: 22, fontWeight: 700, color: GOLD }}>{fmt(totalGeral)}</div>
                 </div>
               </div>
-
-              {/* Alertas vencimentos */}
               {proximosVencimentos.length > 0 && (
                 <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10, padding: '14px 16px', marginBottom: 20 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#92400e', marginBottom: 8 }}>⚠️ Próximas movimentações (7 dias)</div>
@@ -274,7 +280,6 @@ export default function Home() {
                   ))}
                 </div>
               )}
-
               <div className="charts2">
                 <div style={{ background: '#fff', borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: NAVY, marginBottom: 14, borderBottom: `2px solid ${GOLD}`, paddingBottom: 8, display: 'inline-block' }}>Por fase</div>
@@ -305,13 +310,13 @@ export default function Home() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ borderBottom: '2px solid #f3f4f6' }}>
-                        {['Cliente / Processo', 'Fase', 'Valor da causa', 'Previsão honorários', 'Próx. movimentação', ''].map(h => (
+                        {['Cliente / Processo', 'Fase', 'Valor da causa', 'Condenação prevista', 'Previsão honorários', 'Próx. movimentação', ''].map(h => (
                           <th key={h} style={{ textAlign: 'left', padding: '12px 14px', fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {filtrados.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#9ca3af' }}>Nenhum processo encontrado.</td></tr>}
+                      {filtrados.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: '#9ca3af' }}>Nenhum processo encontrado.</td></tr>}
                       {filtrados.map(p => {
                         const fc = FASE_COR[p.fase || ''] || { bg: '#f3f4f6', color: '#6b7280' }
                         const total = calcTotal(p)
@@ -332,14 +337,15 @@ export default function Home() {
                             <td style={{ padding: '12px 14px' }}>
                               <span style={{ padding: '3px 8px', borderRadius: 20, fontSize: 11, fontWeight: 600, background: fc.bg, color: fc.color, whiteSpace: 'nowrap' }}>{p.fase}</span>
                             </td>
-                            <td style={{ padding: '12px 14px', color: '#374151', fontWeight: 500 }}>{fmt(p.valor_causa)}</td>
+                            <td style={{ padding: '12px 14px', color: '#374151' }}>{fmt(p.valor_causa)}</td>
+                            <td style={{ padding: '12px 14px', color: '#2563eb', fontWeight: 500 }}>{fmt((p as any).condenacao_prevista)}</td>
                             <td style={{ padding: '12px 14px' }}>
                               {total > 0 ? (
                                 <div>
                                   <div style={{ fontWeight: 700, color: GOLD, fontSize: 13 }}>{fmt(total)}</div>
                                   <div style={{ fontSize: 10, color: '#9ca3af' }}>
-                                    {p.honorarios_exito_pct ? `Êxito: ${fmt(calcExito(p))}` : ''}
-                                    {p.honorarios_sucumbencia ? ` · Suc.: ${fmt(p.honorarios_sucumbencia)}` : ''}
+                                    {calcExito(p) > 0 ? `Êxito: ${fmt(calcExito(p))}` : ''}
+                                    {p.honorarios_sucumbencia ? `${calcExito(p) > 0 ? ' · ' : ''}Suc.: ${fmt(p.honorarios_sucumbencia)}` : ''}
                                   </div>
                                 </div>
                               ) : <span style={{ color: '#d1d5db' }}>—</span>}
@@ -373,7 +379,7 @@ export default function Home() {
             <div>
               <div style={{ background: '#fff', borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: NAVY, marginBottom: 16, borderBottom: `2px solid ${GOLD}`, paddingBottom: 8, display: 'inline-block' }}>Resumo de honorários previstos</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
                   {[
                     { label: 'Êxito (previsto)', val: totalExito, cor: '#059669' },
                     { label: 'Sucumbência (previsto)', val: totalSucumbencia, cor: '#7c3aed' },
@@ -386,40 +392,42 @@ export default function Home() {
                   ))}
                 </div>
               </div>
-
               <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: '2px solid #f3f4f6' }}>
-                      {['Cliente', 'Valor da causa', '% Êxito', 'Honorários êxito', 'Sucumbência', 'Total previsto'].map(h => (
-                        <th key={h} style={{ textAlign: 'left', padding: '12px 14px', fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 700 }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #f3f4f6' }}>
+                        {['Cliente', 'Valor da causa', 'Condenação prevista', '% Êxito', 'Hon. êxito', 'Sucumbência', 'Total previsto'].map(h => (
+                          <th key={h} style={{ textAlign: 'left', padding: '12px 14px', fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ativos.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: '#9ca3af' }}>Nenhum processo ativo.</td></tr>}
+                      {ativos.map(p => (
+                        <tr key={p.id} style={{ borderBottom: '1px solid #f3f4f6' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <td style={{ padding: '12px 14px', fontWeight: 600, color: NAVY }}>{p.cliente}</td>
+                          <td style={{ padding: '12px 14px', color: '#374151' }}>{fmt(p.valor_causa)}</td>
+                          <td style={{ padding: '12px 14px', color: '#2563eb', fontWeight: 500 }}>{fmt((p as any).condenacao_prevista)}</td>
+                          <td style={{ padding: '12px 14px', color: '#374151' }}>{p.honorarios_exito_pct ? `${p.honorarios_exito_pct}%` : '—'}</td>
+                          <td style={{ padding: '12px 14px', color: '#059669', fontWeight: 500 }}>{calcExito(p) > 0 ? fmt(calcExito(p)) : '—'}</td>
+                          <td style={{ padding: '12px 14px', color: '#7c3aed', fontWeight: 500 }}>{fmt(p.honorarios_sucumbencia)}</td>
+                          <td style={{ padding: '12px 14px', fontWeight: 700, color: GOLD, fontSize: 14 }}>{fmt(calcTotal(p))}</td>
+                        </tr>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ativos.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#9ca3af' }}>Nenhum processo ativo.</td></tr>}
-                    {ativos.map(p => (
-                      <tr key={p.id} style={{ borderBottom: '1px solid #f3f4f6' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                        <td style={{ padding: '12px 14px', fontWeight: 600, color: NAVY }}>{p.cliente}</td>
-                        <td style={{ padding: '12px 14px', color: '#374151' }}>{fmt(p.valor_causa)}</td>
-                        <td style={{ padding: '12px 14px', color: '#374151' }}>{p.honorarios_exito_pct ? `${p.honorarios_exito_pct}%` : '—'}</td>
-                        <td style={{ padding: '12px 14px', color: '#059669', fontWeight: 500 }}>{fmt(calcExito(p)) === '—' ? '—' : fmt(calcExito(p))}</td>
-                        <td style={{ padding: '12px 14px', color: '#7c3aed', fontWeight: 500 }}>{fmt(p.honorarios_sucumbencia)}</td>
-                        <td style={{ padding: '12px 14px', fontWeight: 700, color: GOLD, fontSize: 14 }}>{fmt(calcTotal(p))}</td>
-                      </tr>
-                    ))}
-                    {ativos.length > 0 && (
-                      <tr style={{ borderTop: `2px solid ${GOLD}`, background: '#fffbeb' }}>
-                        <td colSpan={3} style={{ padding: '12px 14px', fontWeight: 700, color: NAVY }}>TOTAL</td>
-                        <td style={{ padding: '12px 14px', fontWeight: 700, color: '#059669' }}>{fmt(totalExito)}</td>
-                        <td style={{ padding: '12px 14px', fontWeight: 700, color: '#7c3aed' }}>{fmt(totalSucumbencia)}</td>
-                        <td style={{ padding: '12px 14px', fontWeight: 700, color: GOLD, fontSize: 15 }}>{fmt(totalGeral)}</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                      {ativos.length > 0 && (
+                        <tr style={{ borderTop: `2px solid ${GOLD}`, background: '#fffbeb' }}>
+                          <td colSpan={4} style={{ padding: '12px 14px', fontWeight: 700, color: NAVY }}>TOTAL</td>
+                          <td style={{ padding: '12px 14px', fontWeight: 700, color: '#059669' }}>{fmt(totalExito)}</td>
+                          <td style={{ padding: '12px 14px', fontWeight: 700, color: '#7c3aed' }}>{fmt(totalSucumbencia)}</td>
+                          <td style={{ padding: '12px 14px', fontWeight: 700, color: GOLD, fontSize: 15 }}>{fmt(totalGeral)}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
@@ -436,17 +444,18 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Modal Processo */}
+      {/* Modal */}
       {modal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 50 }}>
-          <div style={{ background: '#fff', borderRadius: '20px 20px 0 0', padding: '24px 20px', width: '100%', maxWidth: 620, maxHeight: '93vh', overflowY: 'auto' }}>
+          <div style={{ background: '#fff', borderRadius: '20px 20px 0 0', padding: '24px 20px', width: '100%', maxWidth: 640, maxHeight: '93vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, paddingBottom: 14, borderBottom: `2px solid ${GOLD}` }}>
               <div style={{ width: 4, height: 20, background: GOLD, borderRadius: 4 }} />
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: NAVY }}>{editId ? 'Editar processo' : 'Novo processo'}</h2>
             </div>
 
-            <div style={{ fontSize: 11, color: GOLD, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Dados do processo</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            {/* Dados do processo */}
+            <div style={{ fontSize: 11, color: GOLD, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Dados do processo</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
               <div style={{ gridColumn: '1 / -1' }}>
                 <label style={lbl}>Cliente *</label>
                 <input value={form.cliente} onChange={e => setForm(p => ({ ...p, cliente: e.target.value }))} placeholder="Nome completo do cliente" style={inp} />
@@ -485,44 +494,61 @@ export default function Home() {
                   {STATUS.map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
-            </div>
-
-            <div style={{ fontSize: 11, color: GOLD, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Honorários</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 8 }}>
               <div>
                 <label style={lbl}>Valor da causa (R$)</label>
-                <input type="number" value={form.valor_causa || ''} onChange={e => setForm(p => ({ ...p, valor_causa: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="0,00" style={inp} />
-              </div>
-              <div>
-                <label style={lbl}>% Êxito</label>
-                <input type="number" value={form.honorarios_exito_pct || ''} onChange={e => setForm(p => ({ ...p, honorarios_exito_pct: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="Ex: 20" style={inp} />
-              </div>
-              <div>
-                <label style={lbl}>Sucumbência (R$)</label>
-                <input type="number" value={form.honorarios_sucumbencia || ''} onChange={e => setForm(p => ({ ...p, honorarios_sucumbencia: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="0,00" style={inp} />
+                <input type="number" value={form.valor_causa || ''} onChange={e => setForm(p => ({ ...p, valor_causa: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="Referência geral do processo" style={inp} />
+                <span style={sublbl}>Referência geral — não é base dos honorários</span>
               </div>
             </div>
 
-            {/* Preview cálculo */}
-            {(form.valor_causa || form.honorarios_sucumbencia) && (
-              <div style={{ background: '#f8f9fa', borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-                <div style={{ fontSize: 12 }}>
-                  <span style={{ color: '#9ca3af' }}>Êxito previsto: </span>
-                  <span style={{ fontWeight: 700, color: '#059669' }}>{fmt(calcExito(form))}</span>
+            {/* Honorários de êxito */}
+            <div style={{ fontSize: 11, color: GOLD, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Honorários de êxito</div>
+            <div style={{ background: '#f8f9fa', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+              <div className="hon-exito" style={{ gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={lbl}>Condenação prevista (R$)</label>
+                  <input type="number" value={(form as any).condenacao_prevista || ''} onChange={e => setForm(p => ({ ...p, condenacao_prevista: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="Valor que você estima ganhar" style={inp} />
+                  <span style={sublbl}>Sua estimativa do que o juiz irá condenar</span>
                 </div>
-                <div style={{ fontSize: 12 }}>
-                  <span style={{ color: '#9ca3af' }}>Sucumbência: </span>
-                  <span style={{ fontWeight: 700, color: '#7c3aed' }}>{fmt(form.honorarios_sucumbencia)}</span>
+                <div>
+                  <label style={lbl}>% de êxito combinado</label>
+                  <input type="number" value={form.honorarios_exito_pct || ''} onChange={e => setForm(p => ({ ...p, honorarios_exito_pct: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="Ex: 20" style={inp} />
+                  <span style={sublbl}>Percentual contratado com o cliente</span>
                 </div>
-                <div style={{ fontSize: 12 }}>
-                  <span style={{ color: '#9ca3af' }}>Total previsto: </span>
-                  <span style={{ fontWeight: 700, color: GOLD }}>{fmt(calcTotal(form))}</span>
+              </div>
+              {exitoPreview > 0 && (
+                <div style={{ background: '#ecfdf5', borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: '#6b7280' }}>Êxito previsto:</span>
+                  <span style={{ fontWeight: 700, color: '#059669', fontSize: 15 }}>{fmt(exitoPreview)}</span>
+                  {(form as any).condenacao_prevista && form.honorarios_exito_pct && (
+                    <span style={{ fontSize: 11, color: '#9ca3af' }}>({form.honorarios_exito_pct}% × {fmt((form as any).condenacao_prevista)})</span>
+                  )}
                 </div>
+              )}
+            </div>
+
+            {/* Honorários de sucumbência */}
+            <div style={{ fontSize: 11, color: GOLD, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Honorários de sucumbência</div>
+            <div style={{ background: '#f8f9fa', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+              <div>
+                <label style={lbl}>Valor de sucumbência (R$)</label>
+                <input type="number" value={form.honorarios_sucumbencia || ''} onChange={e => setForm(p => ({ ...p, honorarios_sucumbencia: e.target.value ? parseFloat(e.target.value) : null }))} placeholder="Valor fixado ou estimado" style={inp} />
+                <span style={sublbl}>Lance o valor já fixado pelo juiz, ou sua estimativa caso ainda não haja decisão</span>
+              </div>
+            </div>
+
+            {/* Preview total */}
+            {totalPreview > 0 && (
+              <div style={{ background: '#fffbeb', border: `1px solid ${GOLD}`, borderRadius: 10, padding: '12px 16px', marginBottom: 20, display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ fontSize: 12, color: '#92400e' }}>Êxito: <strong>{fmt(exitoPreview)}</strong></div>
+                <div style={{ fontSize: 12, color: '#92400e' }}>Sucumbência: <strong>{fmt(form.honorarios_sucumbencia)}</strong></div>
+                <div style={{ fontSize: 14, color: NAVY, fontWeight: 700 }}>Total previsto: <span style={{ color: GOLD }}>{fmt(totalPreview)}</span></div>
               </div>
             )}
 
-            <div style={{ fontSize: 11, color: GOLD, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Próxima movimentação</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            {/* Próxima movimentação */}
+            <div style={{ fontSize: 11, color: GOLD, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Próxima movimentação</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
               <div>
                 <label style={lbl}>Data</label>
                 <input type="date" value={form.proxima_movimentacao || ''} onChange={e => setForm(p => ({ ...p, proxima_movimentacao: e.target.value }))} style={inp} />
